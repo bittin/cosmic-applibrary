@@ -3,28 +3,29 @@
 use core::str;
 use std::{borrow::Cow, cell::RefCell, iter, path::PathBuf, str::FromStr};
 
+use cosmic::desktop::IconSourceExt;
 use cosmic::{
     iced::{
+        Size, Vector,
         alignment::Vertical,
         clipboard::mime::{AllowedMimeTypes, AsMimeTypes},
-        Size, Vector,
     },
     iced_core::alignment::Horizontal,
     widget::dnd_source,
 };
 
 use cosmic::iced_core::{
-    event, layout, mouse, overlay, renderer, Alignment, Clipboard, Event, Length, Rectangle, Shell,
-    Widget,
+    Alignment, Clipboard, Event, Length, Rectangle, Shell, Widget, event, layout, mouse, overlay,
+    renderer, widget,
 };
 
 use cosmic::{
+    Element,
     desktop::DesktopEntryData,
     iced::widget::{column, text},
-    iced_core::widget::{tree, Operation, Tree},
+    iced_core::widget::{Operation, Tree, tree},
     theme,
     widget::{button, container},
-    Element,
 };
 
 use crate::app::AppSource;
@@ -48,6 +49,7 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
     /// Creates a new [`ApplicationButton`].
     #[must_use]
     pub fn new(
+        widget_id: widget::Id,
         DesktopEntryData {
             name,
             icon: image,
@@ -108,9 +110,9 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
                         .as_cosmic_icon()
                         .width(Length::Fixed(72.0))
                         .height(Length::Fixed(72.0)),
-                    text(name)
+                    container(text(name).size(14.0).width(Length::Shrink))
                         .align_x(Horizontal::Center)
-                        .size(14)
+                        .width(Length::Fill)
                         .height(Length::Fixed(40.0))
                 ]
                 .width(Length::Fixed(120.0))
@@ -119,6 +121,7 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
                 .align_x(Alignment::Center)
                 .width(Length::Fill),
             )
+            .id(widget_id)
             .selected(selected)
             .width(Length::FillPortion(1))
             .class(theme::Button::IconVertical)

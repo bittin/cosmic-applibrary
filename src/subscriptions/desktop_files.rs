@@ -1,5 +1,5 @@
 use cosmic::{
-    iced::{stream, Subscription},
+    iced::{Subscription, stream},
     iced_futures::futures::{self, SinkExt},
 };
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -44,7 +44,7 @@ pub fn desktop_files<I: 'static + Hash + Copy + Send + Sync + Debug>(
             );
 
             if let Ok(mut watcher) = watcher {
-                for path in freedesktop_desktop_entry::default_paths() {
+                for path in cosmic::desktop::fde::default_paths() {
                     let _ = watcher.watch(path.as_ref(), RecursiveMode::Recursive);
                 }
 
