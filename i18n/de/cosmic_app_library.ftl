@@ -1,4 +1,4 @@
-cosmic-app-library = COSMIC App Library
+cosmic-app-library = COSMIC App-Bibliothek
 cosmic-library-home = Bibliothek-Startseite
 cosmic-office = Büro
 cosmic-system = System
@@ -12,7 +12,7 @@ search-placeholder = Nach Apps suchen...
 new-group-placeholder = Ordnername
 pin-to-app-tray = An die App-Ablage anheften
 run = Ausführen
-run-on = Ausführen auf {$gpu}
+run-on = Ausführen auf { $gpu }
 run-on-default = (Standard)
 remove = In Bibliothek-Startseite verschieben
 add-group = Gruppe erstellen

@@ -19,7 +19,7 @@ use cosmic::{
     cosmic_config::{Config, CosmicConfigEntry},
     cosmic_theme::Spacing,
     dbus_activation,
-    desktop::{DesktopEntryData, fde::PathSource, load_desktop_file},
+    desktop::{DesktopEntryData, IconSourceExt, fde::PathSource, load_desktop_file},
     iced::{
         self, Alignment, Color, Length, Limits, Size, Subscription,
         alignment::Horizontal,
@@ -165,7 +165,7 @@ pub fn run() -> cosmic::iced::Result {
 pub struct AppSource(PathSource);
 
 impl AppSource {
-    pub fn as_icon(&self) -> Option<icon::Icon> {
+    pub fn as_icon(&self) -> Option<widget::icon::Handle> {
         let name = match &self.0 {
             PathSource::Local | PathSource::LocalDesktop => "app-source-local-symbolic",
             PathSource::System | PathSource::SystemLocal => "app-source-system-symbolic",
@@ -175,16 +175,7 @@ impl AppSource {
             PathSource::Other(_) => return None,
         };
         let handle = crate::icon_cache::icon_cache_handle(name, 16);
-        let symbolic = handle.symbolic;
-
-        Some(icon::icon(handle).size(16).class(if symbolic {
-            cosmic::theme::Svg::Custom(Rc::new(|t| {
-                let color = t.cosmic().on_primary_component_color().into();
-                svg::Style { color: Some(color) }
-            }))
-        } else {
-            cosmic::theme::Svg::Default
-        }))
+        Some(handle)
     }
 }
 
@@ -211,6 +202,13 @@ impl<'a> Display for AppSource {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SurfaceState {
+    Visible,
+    Hidden,
+    WaitingToBeShown,
+}
+
 struct CosmicAppLibrary {
     search_value: String,
     entry_path_input: Vec<Arc<DesktopEntryData>>,
@@ -219,7 +217,6 @@ struct CosmicAppLibrary {
     helper: Option<Config>,
     config: AppLibraryConfig,
     cur_group: usize,
-    active_surface: bool,
     locale: Option<String>,
     edit_name: Option<String>,
     new_group: Option<String>,
@@ -231,7 +228,7 @@ struct CosmicAppLibrary {
     group_to_delete: Option<usize>,
     gpus: Option<Vec<Gpu>>,
     last_hide: Option<Instant>,
-    duplicates: HashMap<PathBuf, AppSource>,
+    duplicates: HashMap<PathBuf, (AppSource, Option<widget::icon::Handle>)>,
     app_list_config: AppListConfig,
     overlap: HashMap<String, Rectangle>,
     margin: f32,
@@ -239,7 +236,9 @@ struct CosmicAppLibrary {
     needs_clear: bool,
     focused_id: Option<widget::Id>,
     entry_ids: Vec<widget::Id>,
+    entry_icon_handles: Vec<widget::icon::Handle>,
     scrollable_id: widget::Id,
+    surface_state: SurfaceState,
 }
 
 impl Default for CosmicAppLibrary {
@@ -252,7 +251,6 @@ impl Default for CosmicAppLibrary {
             helper: Default::default(),
             config: Default::default(),
             cur_group: Default::default(),
-            active_surface: Default::default(),
             locale: Default::default(),
             edit_name: Default::default(),
             new_group: Default::default(),
@@ -272,7 +270,9 @@ impl Default for CosmicAppLibrary {
             needs_clear: Default::default(),
             focused_id: Default::default(),
             entry_ids: Default::default(),
+            entry_icon_handles: Default::default(),
             scrollable_id: widget::Id::unique(),
+            surface_state: SurfaceState::Hidden,
         }
     }
 }
@@ -296,15 +296,16 @@ async fn try_get_gpus() -> Option<Vec<Gpu>> {
 
 impl CosmicAppLibrary {
     pub fn activate(&mut self) -> Task<Message> {
-        if self.active_surface {
+        if matches!(self.surface_state, SurfaceState::Visible) {
             return self.hide();
-        } else if !self
-            .last_hide
-            .is_some_and(|i| i.elapsed() < Duration::from_millis(100))
+        } else if matches!(self.surface_state, SurfaceState::Hidden)
+            && !self
+                .last_hide
+                .is_some_and(|i| i.elapsed() < Duration::from_millis(100))
         {
+            self.surface_state = SurfaceState::WaitingToBeShown;
             self.edit_name = None;
             self.search_value = "".to_string();
-            self.active_surface = true;
             self.scroll_offset = 0.0;
             self.cur_group = 0;
             self.load_apps();
@@ -335,7 +336,7 @@ impl CosmicAppLibrary {
     }
 
     fn handle_overlap(&mut self) {
-        if !self.active_surface {
+        if !matches!(self.surface_state, SurfaceState::Visible) {
             return;
         }
 
@@ -352,6 +353,19 @@ impl CosmicAppLibrary {
 
             self.margin = o.y + o.height;
         }
+    }
+
+    /// Update entry IDs and their icon handles.
+    fn update_entry_metadata(&mut self) {
+        self.entry_ids = (0..self.entry_path_input.len())
+            .map(|_| widget::Id::unique())
+            .collect();
+
+        self.entry_icon_handles = self
+            .entry_path_input
+            .iter()
+            .map(|e| e.icon.as_cosmic_icon())
+            .collect();
     }
 }
 
@@ -438,6 +452,7 @@ impl CosmicAppLibrary {
             xdg_current_desktop.as_deref(),
         )
         .into_iter()
+        .filter(|d| d.exec.is_some())
         .map(Arc::new)
         .collect();
         self.all_entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -463,12 +478,14 @@ impl CosmicAppLibrary {
                             // insert previous entry
                             if let Some(path) = self.all_entries[i - 1].path.as_ref() {
                                 let source = AppSource::from(path.as_ref());
-                                dups.insert(path.clone(), source);
+                                let icon_handle = source.as_icon();
+                                dups.insert(path.clone(), (source, icon_handle));
                             }
                         }
                         if let Some(path) = e.path.as_ref() {
                             let source = AppSource::from(path.as_ref());
-                            dups.insert(path.clone(), source);
+                            let icon_handle = source.as_icon();
+                            dups.insert(path.clone(), (source, icon_handle));
                         }
                         (dups, cur_count + 1, cur_name, cur_id)
                     } else {
@@ -477,9 +494,7 @@ impl CosmicAppLibrary {
                 },
             )
             .0;
-        self.entry_ids = (0..self.entry_path_input.len())
-            .map(|_| widget::Id::unique())
-            .collect();
+        self.update_entry_metadata();
     }
 
     fn filter_apps(&mut self) -> Task<Message> {
@@ -504,6 +519,9 @@ impl CosmicAppLibrary {
     }
 
     pub fn hide(&mut self) -> Task<Message> {
+        if !matches!(self.surface_state, SurfaceState::Visible) {
+            return Task::none();
+        }
         // cancel existing dnd if it exists then try again...
         if self.dnd_icon.take().is_some() {
             return Task::batch(vec![
@@ -513,7 +531,7 @@ impl CosmicAppLibrary {
         }
         self.focused_id = None;
         self.entry_ids.clear();
-        self.active_surface = false;
+        self.entry_icon_handles.clear();
         self.new_group = None;
         self.search_value.clear();
         self.edit_name = None;
@@ -521,6 +539,8 @@ impl CosmicAppLibrary {
         self.menu = None;
         self.group_to_delete = None;
         self.scroll_offset = 0.0;
+        self.surface_state = SurfaceState::Hidden;
+
         iced::Task::batch(vec![
             text_input::focus(SEARCH_ID.clone()),
             destroy_popup(MENU_ID.clone()),
@@ -694,7 +714,7 @@ impl cosmic::Application for CosmicAppLibrary {
                 }
                 LayerEvent::Unfocused => {
                     self.last_hide = Some(Instant::now());
-                    if self.active_surface
+                    if matches!(self.surface_state, SurfaceState::Visible)
                         && id == WINDOW_ID.clone()
                         && self.menu.is_none()
                         && self.new_group.is_none()
@@ -970,9 +990,8 @@ impl cosmic::Application for CosmicAppLibrary {
             }
             Message::FilterApps(input, filtered_apps) => {
                 self.entry_path_input = filtered_apps;
-                self.entry_ids = (0..self.entry_path_input.len())
-                    .map(|_| widget::Id::unique())
-                    .collect();
+                self.update_entry_metadata();
+
                 self.waiting_for_filtered = false;
                 if self.search_value != input {
                     return self.filter_apps();
@@ -1007,6 +1026,9 @@ impl cosmic::Application for CosmicAppLibrary {
             }
             Message::Opened(size, window_id) => {
                 if window_id == WINDOW_ID.clone() {
+                    if matches!(self.surface_state, SurfaceState::WaitingToBeShown) {
+                        self.surface_state = SurfaceState::Visible;
+                    }
                     self.height = size.height;
                     self.handle_overlap();
                 }
@@ -1051,11 +1073,11 @@ impl cosmic::Application for CosmicAppLibrary {
         }
     }
 
-    fn view(&self) -> Element<Message> {
+    fn view<'a>(&'a self) -> Element<'a, Message> {
         unimplemented!()
     }
 
-    fn view_window(&self, id: SurfaceId) -> Element<Message> {
+    fn view_window<'a>(&'a self, id: SurfaceId) -> Element<'a, Message> {
         let Spacing {
             space_none,
             space_xxs,
@@ -1091,7 +1113,7 @@ impl cosmic::Application for CosmicAppLibrary {
                     list_column.push(
                         menu_button(body(format!(
                             "{} {}",
-                            fl!("run-on", gpu = gpu.name.clone()),
+                            fl!("run-on", gpu = (&gpu.name)),
                             if j == default_idx {
                                 fl!("run-on-default")
                             } else {
@@ -1162,16 +1184,19 @@ impl cosmic::Application for CosmicAppLibrary {
                 container(scrollable(Column::with_children(list_column)))
                     .padding([8, 0])
                     .class(theme::Container::Custom(Box::new(|theme| {
+                        let t = theme.cosmic();
+                        let radii = t.radius_s().map(|x| if x < 4.0 { x } else { x + 4.0 });
+
                         container::Style {
-                            text_color: Some(theme.cosmic().on_bg_color().into()),
-                            background: Some(Color::from(theme.cosmic().background.base).into()),
+                            text_color: Some(t.on_bg_color().into()),
+                            icon_color: Some(t.on_bg_color().into()),
+                            background: Some(Color::from(t.background.base).into()),
                             border: Border {
-                                color: theme.cosmic().bg_divider().into(),
-                                radius: theme.cosmic().corner_radii.radius_m.into(),
+                                radius: radii.into(),
                                 width: 1.0,
+                                color: t.bg_divider().into(),
                             },
                             shadow: Shadow::default(),
-                            icon_color: Some(theme.cosmic().on_bg_color().into()),
                         }
                     })))
                     .width(Length::Shrink)
@@ -1234,14 +1259,17 @@ impl cosmic::Application for CosmicAppLibrary {
             return autosize(
                 container(dialog)
                     .class(theme::Container::Custom(Box::new(|theme| {
+                        let t = theme.cosmic();
+                        let radii = t.radius_s().map(|x| if x < 4.0 { x } else { x + 4.0 });
+
                         container::Style {
-                            text_color: Some(theme.cosmic().on_bg_color().into()),
-                            icon_color: Some(theme.cosmic().on_bg_color().into()),
-                            background: Some(Color::from(theme.cosmic().background.base).into()),
+                            text_color: Some(t.on_bg_color().into()),
+                            icon_color: Some(t.on_bg_color().into()),
+                            background: Some(Color::from(t.background.base).into()),
                             border: Border {
-                                color: theme.cosmic().bg_divider().into(),
-                                radius: theme.cosmic().corner_radii.radius_m.into(),
+                                radius: radii.into(),
                                 width: 1.0,
+                                color: t.bg_divider().into(),
                             },
                             shadow: Shadow::default(),
                         }
@@ -1303,14 +1331,17 @@ impl cosmic::Application for CosmicAppLibrary {
             return autosize(
                 container(dialog)
                     .class(theme::Container::Custom(Box::new(|theme| {
+                        let t = theme.cosmic();
+                        let radii = t.radius_s().map(|x| if x < 4.0 { x } else { x + 4.0 });
+
                         container::Style {
-                            text_color: Some(theme.cosmic().on_bg_color().into()),
-                            icon_color: Some(theme.cosmic().on_bg_color().into()),
-                            background: Some(Color::from(theme.cosmic().background.base).into()),
+                            text_color: Some(t.on_bg_color().into()),
+                            icon_color: Some(t.on_bg_color().into()),
+                            background: Some(Color::from(t.background.base).into()),
                             border: Border {
-                                color: theme.cosmic().bg_divider().into(),
-                                radius: theme.cosmic().corner_radii.radius_m.into(),
+                                radius: radii.into(),
                                 width: 1.0,
+                                color: t.bg_divider().into(),
                             },
                             shadow: Shadow::default(),
                         }
@@ -1408,8 +1439,9 @@ impl cosmic::Application for CosmicAppLibrary {
             .entry_path_input
             .iter()
             .zip(self.entry_ids.iter())
+            .zip(self.entry_icon_handles.iter())
             .enumerate()
-            .map(|(i, (entry, id))| {
+            .map(|(i, ((entry, id), icon_handle))| {
                 let gpu_idx = self.gpus.as_ref().map(|gpus| {
                     if entry.prefers_dgpu {
                         gpus.iter().position(|gpu| !gpu.default).unwrap_or(0)
@@ -1425,7 +1457,9 @@ impl cosmic::Application for CosmicAppLibrary {
 
                 let b = ApplicationButton::new(
                     id.clone(),
-                    &entry,
+                    &entry.name,
+                    icon_handle.clone(),
+                    &entry.path,
                     move |rect| Message::OpenContextMenu(rect, i),
                     if self.menu.is_none() {
                         Some(Message::ActivateApp(i, gpu_idx))
@@ -1607,16 +1641,19 @@ impl cosmic::Application for CosmicAppLibrary {
             .max_height(685)
             .max_width(1200.0)
             .class(theme::Container::Custom(Box::new(|theme| {
+                let t = theme.cosmic();
+                let radii = t.radius_s().map(|x| if x < 4.0 { x } else { x + 4.0 });
+
                 container::Style {
-                    text_color: Some(theme.cosmic().on_bg_color().into()),
-                    background: Some(Color::from(theme.cosmic().background.base).into()),
+                    text_color: Some(t.on_bg_color().into()),
+                    icon_color: Some(t.on_bg_color().into()),
+                    background: Some(Color::from(t.background.base).into()),
                     border: Border {
-                        radius: theme.cosmic().corner_radii.radius_m.into(),
+                        radius: radii.into(),
                         width: 1.0,
-                        color: theme.cosmic().bg_divider().into(),
+                        color: t.bg_divider().into(),
                     },
                     shadow: Shadow::default(),
-                    icon_color: Some(theme.cosmic().on_bg_color().into()),
                 }
             })))
             .center_x(Length::Fill);
@@ -1675,7 +1712,7 @@ impl cosmic::Application for CosmicAppLibrary {
                         wayland::Event::Layer(e, _, id),
                     )) => Some(Message::Layer(e, id)),
                     cosmic::iced::Event::PlatformSpecific(PlatformSpecific::Wayland(
-                        wayland::Event::OverlapNotify(event),
+                        wayland::Event::OverlapNotify(event, ..),
                     )) => Some(Message::Overlap(event)),
                     cosmic::iced::Event::Keyboard(cosmic::iced::keyboard::Event::KeyReleased {
                         key: Key::Named(Named::Escape),
