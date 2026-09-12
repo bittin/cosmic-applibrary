@@ -1,10 +1,9 @@
-cosmic-app-library = COSMIC App Bibliotek
 cosmic-system = System
 new-group = Opret Mappe
 name = Navn
 ok = Ok
 save = Gem
-cancel = Annuller
+cancel = Afbryd
 search-placeholder = Tast for at søge i apps…
 new-group-placeholder = Mappenavn
 run = Kør

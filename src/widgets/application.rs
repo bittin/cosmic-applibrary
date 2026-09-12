@@ -95,10 +95,15 @@ impl<'a, Message: Clone + 'static> ApplicationButton<'a, Message> {
                         .icon()
                         .width(Length::Fixed(72.0))
                         .height(Length::Fixed(72.0)),
-                    container(text(name).size(14.0).width(Length::Shrink))
-                        .align_x(Horizontal::Center)
-                        .width(Length::Fill)
-                        .height(Length::Fixed(40.0))
+                    container(
+                        text(name)
+                            .size(14.0)
+                            .width(Length::Shrink)
+                            .align_x(text::Alignment::Center)
+                    )
+                    .align_x(Horizontal::Center)
+                    .width(Length::Fill)
+                    .height(Length::Fixed(40.0))
                 ]
                 .width(Length::Fixed(120.0))
                 .height(Length::Fixed(120.0))
@@ -311,12 +316,12 @@ where
                     state.right_press = true;
                     shell.capture_event();
                 }
-                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Right)) => {
-                    if state.right_press {
-                        shell.publish(self.on_right_release.as_ref()(layout.bounds()));
-                        state.right_press = false;
-                        shell.capture_event();
-                    }
+                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Right))
+                    if state.right_press =>
+                {
+                    shell.publish(self.on_right_release.as_ref()(layout.bounds()));
+                    state.right_press = false;
+                    shell.capture_event();
                 }
                 _ => {}
             }
