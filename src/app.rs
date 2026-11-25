@@ -374,7 +374,8 @@ impl CosmicAppLibrary {
                 |app: &CosmicAppLibrary| LiveSettings {
                     padding: Some(app.layer_padding()),
                     corners: None,
-                    blur: None,
+                    // Blur is sent with the padding in handle_overlap
+                    blur: Some(false),
                 },
                 move |_: &mut CosmicAppLibrary| SctkLayerSurfaceSettings {
                     id: SurfaceId::RESERVED,
@@ -404,6 +405,12 @@ impl CosmicAppLibrary {
             }
 
             self.margin = o.y + o.height;
+        }
+        // Without a live surface libcosmic queues the blur and applies it to the
+        // next surface it creates which is full-screen (unpadded)
+        // causing blur flashed on the next open
+        if self.surface_state != SurfaceState::Visible {
+            return Task::none();
         }
         let mut cmds = Vec::with_capacity(2);
         // set the padding
